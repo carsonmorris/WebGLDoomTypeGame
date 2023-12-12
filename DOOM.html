@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<title>DOOM Final</title>
+	<meta name="generator" content="BBEdit 10.5" />
+
+<!-- load matrix manipulation helper methods -->	
+<script type="text/javascript" src="glMatrix_util.js"></script>
+<script type="text/javascript" src="webgl-utils.js"></script>
+<script type="text/javascript" src="mouse_util.js"></script>
+<script type="text/javascript" src="sphere.js"></script>
+<script type="text/javascript" src="stack.js"></script>
+
+<!-- define our shaders -->
+<script id="shader-fs" type="x-shader/x-fragment">
+    precision mediump float;
+
+    varying vec2 vTextureCoord;
+    varying vec3 lightAdjustment;
+
+    uniform sampler2D uSampler;
+
+    void main(void) {
+        vec4 tx_FragColor = texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+        gl_FragColor = vec4(tx_FragColor.rgb * lightAdjustment, tx_FragColor.a);
+    }
+</script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aTextureCoord;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat3 uNMatrix;
+    uniform sampler2D uSampler;
+
+    varying vec2 vTextureCoord;
+    varying vec3 nVertexPosition;
+    
+    //lighting-values
+    uniform vec3 ambLight;
+    uniform vec3 dirLight;
+    uniform vec3 dirAngle;
+    
+    varying vec3 lightAdjustment;
+    varying vec4 colorVec;
+    varying vec4 nColorVec;
+
+    void main(void) {
+        //gets texture color-values
+        vTextureCoord = aTextureCoord;
+        colorVec = texture2D(uSampler,vTextureCoord);
+        nColorVec = normalize(colorVec);
+        
+        
+        //changes the y-value of each vertex based on the color-values
+        nVertexPosition[0] = aVertexPosition[0];
+        nVertexPosition[1] = aVertexPosition[1];
+        nVertexPosition[2] = aVertexPosition[2];
+
+        //sets the vertex position
+        gl_Position = uPMatrix * uMVMatrix * vec4(nVertexPosition, 1.0);
+        
+        //gets a value for light-weighting to use in the fragment shader
+        vec3 transformedNormal = uNMatrix * aVertexNormal;
+        float dirLightWeight = max(dot(transformedNormal, dirAngle), 0.0);
+        lightAdjustment = ambLight + dirLight * dirLightWeight;
+    }
+</script>
+
+	
+<script> <!-- define Javascript functions for drawing WebGL items -->
+
+    var gl;
+
+    function initWebGLContext(aname) {
+        gl = null;
+        var canvas = document.getElementById(aname);
+        try {
+        // Try to grab the standard context. If it fails, fallback to experimental.
+        gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        }
+        catch(e) {}
+
+        // If we don't have a GL context, give up now
+        if (!gl) {
+        alert("Unable to initialize WebGL. Your browser may not support it.");
+        gl = null;
+        }
+        gl.viewportWidth = canvas.width;
+        gl.viewportHeight = canvas.height;
+        return gl;
+    }
+
+    // define the function to initial WebGL and Setup Geometry Objects
+    function initGLScene()
+    {
+        // Initialize the WebGL Context - the gl engine for drawing things.
+        var gl = initWebGLContext("hellowebgl"); // The id of the Canvas Element
+        if (!gl) // if fails simply return
+        {
+            return;
+        }
+        // succeeded in initializing WebGL system
+        return gl;     
+    }
+
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var str = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                str += k.textContent;
+            }
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "x-shader/x-fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } else if (shaderScript.type == "x-shader/x-vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } else {
+            return null;
+        }
+
+        gl.shaderSource(shader, str);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+
+    var shaderProgram;
+
+    function initShaders() 
+    {
+        var fragmentShader = getShader(gl, "shader-fs");
+        var vertexShader = getShader(gl, "shader-vs");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.textureCoordAttribute = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+        gl.enableVertexAttribArray(shaderProgram.textureCoordAttribute);
+
+        shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+        shaderProgram.tnMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+        shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+        //color uniforms
+        shaderProgram.ambLightUniform = gl.getUniformLocation(shaderProgram, "ambLight");
+        shaderProgram.dirLightUniform = gl.getUniformLocation(shaderProgram, "dirLight");
+        shaderProgram.dirAngleUniform = gl.getUniformLocation(shaderProgram, "dirAngle");
+    }
+
+    // create our basic model and view matrix
+    var mvMatrix = mat4.create();
+    var mvMatrixStack = [];
+
+    // create our projection matrix for projecting from 3D to 2D.
+    var pMatrix = mat4.create();
+
+    function mvPushMatrix() 
+    {
+        var copy = mat4.create();
+        mat4.set(mvMatrix, copy);
+        mvMatrixStack.push(copy);
+    }
+
+    function mvPopMatrix() 
+    {
+        if (mvMatrixStack.length == 0) {
+            throw "Invalid popMatrix!";
+        }
+        mvMatrix = mvMatrixStack.pop();
+    }
+
+    function setMatrixUniforms()
+    {
+        gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+
+        // lighting controls for normals
+        var normalMatrix = mat3.create();
+        mat4.toInverseMat3(mvMatrix, normalMatrix);
+        mat3.transpose(normalMatrix);
+        gl.uniformMatrix3fv(shaderProgram.tnMatrixUniform, false, normalMatrix);
+    }
+
+    // create and initialize our geometry objects
+    var terVertexPositionBuffer;
+    var terVertexTextureCoordBuffer;
+    var terVertexIndexBuffer;
+    var terNormalBuffer;
+
+    function initGeometry()
+    {
+        terVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, terVertexPositionBuffer);
+        
+        vertices = [];
+        nvertices = [];
+        
+        // creates a 256 by 256 grid
+        for ( i = 0; i < 256; i++)
+        {
+            for (j = 0; j < 256; j++)
+            {
+            //coordinates
+                vertices[0 + j*3 + i*256*3] = (j*1.0)/128.0 -1.0; // x coord (smooth from -1.0 to 1.0)
+                vertices[1 + j*3 + i*256*3] = 0.0; // y coord (0.0)
+                vertices[2 + j*3 + i*256*3] = (i*1.0)/128.0 -1.0; // z coord (smooth from -1.0 to 1.0)
+            
+                //normals
+                nvertices[0 + j*3 + i*256*3] = 0.0;
+                nvertices[1 + j*3 + i*256*3] = 1.0; //set the normals to facing up
+                nvertices[2 + j*3 + i*256*3] = 0.0;
+            }
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+        terVertexPositionBuffer.itemSize = 3;
+        
+        // creates normals buffer
+        terNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, terNormalBuffer);
+
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(nvertices), gl.STATIC_DRAW);
+        terNormalBuffer.itemSize = 3;
+
+        terVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, terVertexTextureCoordBuffer);
+        textureCoords = [];
+        tc = 0;
+
+        // calculate s & t texture coordinates
+        for ( i = 0; i < 256; i++)
+        {
+            for (j = 0; j < 256; j++)
+            {
+                textureCoords[tc++] = 0.0 + (j*1.0)/256.0;
+                textureCoords[tc++] = 0.0 + (i*1.0)/256.0;
+                
+            }
+        }
+        
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+        terVertexTextureCoordBuffer.itemSize = 2;
+
+        terVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, terVertexIndexBuffer);
+        terVertexIndices = [];
+        tvi = 0;
+
+        // calculate the vertex numbers for the geometry
+        for ( i=0; i < 255; i++)
+        {
+            for (j = 0; j < 255; j++)
+            {
+                terVertexIndices[tvi++] = 0+j+i*256;
+                terVertexIndices[tvi++] = 1+j+i*256;
+                terVertexIndices[tvi++] = 0+j+(i+1)*256;
+
+                terVertexIndices[tvi++] = 1+j+i*256;
+                terVertexIndices[tvi++] = 1+j+(i+1)*256;
+                terVertexIndices[tvi++] = 0+j+(i+1)*256;
+                
+            }
+        }
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(terVertexIndices), gl.STATIC_DRAW);
+        terVertexIndexBuffer.numItems = tvi;
+    }
+
+
+    // Initialize our texture data and prepare it for rendering
+    var Gpixels; // array of all pixel data
+    var exTexture; // the texture
+    var wallTexture;
+    var skyTexture;
+    var modelTexture;
+    function initTextures()
+    {
+        exTexture = gl.createTexture();
+        exTexture.image = new Image();
+        exTexture.image.onload = function() {
+            handleLoadedTexture(exTexture)
+        }
+        exTexture.image.src = "textures/doom_floor.png";
+
+        wallTexture = gl.createTexture();
+        wallTexture.image = new Image();
+        wallTexture.image.onload = function() {
+            handleLoadedTexture(wallTexture)
+        }
+        wallTexture.image.src = "textures/doom_wall.png";
+
+        skyTexture = gl.createTexture();
+        skyTexture.image = new Image();
+        skyTexture.image.onload = function() {
+            handleLoadedTexture(skyTexture)
+        }
+        skyTexture.image.src = "textures/sky.png";
+
+        modelTexture = gl.createTexture();
+        modelTexture.image = new Image();
+        modelTexture.image.onload = function() {
+            handleLoadedTexture(modelTexture)
+        }
+        modelTexture.image.src = "textures/red-gradient.jpg";
+
+        crossTexture = gl.createTexture();
+        crossTexture.image = new Image();
+        crossTexture.image.onload = function() {
+            handleLoadedTexture(crossTexture)
+        }
+        crossTexture.image.src = "textures/cross.png";
+
+        ammoTexture = gl.createTexture();
+        ammoTexture.image = new Image();
+        ammoTexture.image.onload = function() {
+            handleLoadedTexture(ammoTexture)
+        }
+        ammoTexture.image.src = "textures/ammo.png";
+
+    }
+
+    var Gloaded = 0;
+    function handleLoadedTexture(texture)
+    {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, texture.image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        
+
+        var width = texture.image.width;
+        var height = texture.image.height;
+        Gpixels = new Uint8Array(4 * width * height);
+    
+        var framebuffer = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) == gl.FRAMEBUFFER_COMPLETE) {
+            gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, Gpixels);
+        }
+        Gloaded = 1;
+        
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.deleteFramebuffer(framebuffer);
+    }
+
+const size = 200000;
+var vertexBuff = new Float32Array(70158);
+var vertexRear = 0;
+var textureBuff = new Float32Array(size);
+var textureRear = 0;
+var normalBuff = new Float32Array(size);
+var normalRear = 0;
+var indexBuff = new Uint16Array(size);
+var indexRear = 0;
+    function renderModel(){
+        fetch('/assets/Alien/alien.obj').then((response)=> {
+            console.log("DONE")
+            response.text().then((text) =>{
+                var delims = ["/", " ", ".", "-", "\r"];
+                var nums = ["0","1","2","3","4","5","6","7","8","9"];
+
+                const iter = text[Symbol.iterator]();
+
+                //Gets the next float
+                function nextFloat(fliter){
+                    let char;
+                    let val = [];
+                    while((char = fliter.next())){
+                        if(char.done){
+                            return parseFloat(val.join(''));
+                        }
+
+                        if(delims.includes(char.value.value)){
+                            switch(char.value.value){
+                                case " ":
+                                case "/":
+                                case "\r":
+                                    // Ignore all indexes but the first
+                                    while(char.value.value != " "){
+                                        char = (fliter.next());
+                                        if(char.done){
+                                            break;
+                                        }
+                                    }
+                                    return parseFloat(val.join(''));
+                                case ".":
+                                case "-":
+                                    val.push(char.value.value);
+                                    break;
+                                default:
+                                    return -1;
+                            }
+
+                        } else if (nums.includes(char.value.value)){
+                            val.push(char.value.value)
+                        } else{
+                            return -1;
+                        }
+                    }
+
+                    return -1;
+                }
+
+                //Gets the next line
+                function nextLine(){
+                    const line = [];
+                    let curr = iter.next();
+
+                    if(curr.done){
+                        return null;
+                    }
+
+                    while(curr.value != "\n"){
+                        if(curr.done){
+                            return null;
+                        }
+
+                        line.push(curr);
+                        curr = iter.next();
+                    }
+                    
+                    return line;
+                }
+
+                let line = [];
+                while((line = nextLine()) != null){
+                    const fliter = line[Symbol.iterator]();
+                    switch(line[0].value){
+                        case "v":
+                            // vertexBuff.push(nextFloat(line))
+                            fliter.next(); //remove the v space
+                            fliter.next();
+                            vertexBuff[vertexRear++] = nextFloat(fliter)/150;
+                            vertexBuff[vertexRear++] = nextFloat(fliter)/150;
+                            vertexBuff[vertexRear++] = nextFloat(fliter)/150;
+                            break;
+                        case "t":
+                            fliter.next(); //remove the v space
+                            fliter.next();
+                            textureBuff[textureRear++] = nextFloat(fliter);
+                            textureBuff[textureRear++] = nextFloat(fliter);
+                            break;
+                        case "n":
+                            fliter.next(); //remove the v space
+                            fliter.next();
+                            normalBuff[normalRear++] = nextFloat(fliter);
+                            normalBuff[normalRear++] = nextFloat(fliter);
+                            normalBuff[normalRear++] = nextFloat(fliter);
+                            break;
+                        case "f":
+                            fliter.next(); //remove the f
+                            fliter.next(); //remove the first space
+                            // indexBuff[indexRear++] = nextFloat(fliter);
+                            const first = nextFloat(fliter);
+                            const second = nextFloat(fliter);
+                            const third = nextFloat(fliter);
+                            //Count num of faces
+                            indexBuff[indexRear++] = first;
+                            indexBuff[indexRear++] = second;
+                            indexBuff[indexRear++] = third;
+
+                            let count = 0;
+                            for(i = 0; i < line.length; i++){
+                                if (line[i].value == "/"){
+                                    count++;
+                                }
+                            }
+                            if(count == 8){
+                                const fourth = nextFloat(fliter);
+
+                                indexBuff[indexRear++] = second;
+                                indexBuff[indexRear++] = fourth;
+                                indexBuff[indexRear++] = third;
+                            }
+
+                            break;
+                        default:
+                            console.log(line);
+                    }   
+                }
+
+                console.log("done parsing model")
+            });
+        });
+
+        // var arr = [""]
+        // var file = new File(arr, "/home/bigboss/repos/CS464/DOOM/README.md")
+        // var text = reader.readAsText(file).then( );
+        // var text = reader.readAsText('README.md');
+        // console.log(file.text().then(function thing(result){console.log(result)}))
+        // console.log(file.text().then())
+
+    }
+
+    const terMap = [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1,
+        1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    ]
+
+    //Initialize everything for starting up a simple webGL application
+    function startHelloWebGL() 
+    {
+        // first initialize webgl components 
+        var gl = initGLScene();
+        
+        Gimage = new Image();
+
+        // now build basic geometry objects.
+        initShaders();
+        initGeometry();
+        initTextures();
+        initWall();
+        initCross();
+        initAmmo();
+
+        // attach mouse handler functions to the canvas.
+        var acanvas = document.getElementById("hellowebgl");
+        acanvas.onmousedown = handleMouseDown;  // handle mouse down events 
+        document.onmouseup = handleMouseUp;   // handle when mouse is relealsed
+        document.onmousemove = handleMouseMove; // handle mouse movement
+
+        gl.clearColor(0.4,0.4,0.4,1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        //Adding models
+        renderModel();
+
+        // Draw the Scene
+        Frames();
+    }
+
+    function makeSphere(x, y, z, size){
+        var vertex, normal, texture, index;
+
+        //Setting up our geometry object
+        // var thisSquare = square();
+        var thisSquare = sphere(); //Is actually sphere, not square.
+        thisSquare.init(x, y, z, size);
+
+        //Setting up the vertexes for the geometry
+        vertex = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertex);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(thisSquare.getVertices()), gl.STATIC_DRAW);
+        if(vertex === null){
+            console.log("Incoming null")
+        }
+        vertex.itemSize = 3;
+        vertex.numItems = thisSquare.getNumVertices();
+
+        //Setting up the normals for the geometry
+        normal = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normal);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(thisSquare.getNVertices()), gl.STATIC_DRAW);
+        normal.itemSize = 3;
+        normal.numItems = thisSquare.getNumVertices();
+
+        //Setting up the texture coordinates for the geometry
+        texture = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, texture);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(thisSquare.getTextureCoords()), gl.STATIC_DRAW);
+        texture.itemSize = 2;
+        texture.numItems = thisSquare.getNumTextureCoords();
+
+        //Setting up the vertex indices for this geometry
+        index = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(thisSquare.getVertexIndices()), gl.STATIC_DRAW);
+        index.numItems = thisSquare.getNumIndices();
+
+        return {
+            vertex, normal, texture, index
+        }
+    }
+
+    function makeModel(x, y, z, size){
+        var vertex, normal, texture, index;
+
+        //Setting up our geometry object
+        // var thisSquare = square();
+        //Setting up the vertexes for the geometry
+        vertex = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertex);
+        gl.bufferData(gl.ARRAY_BUFFER, vertexBuff, gl.STATIC_DRAW);
+        if(vertex === null){
+            console.log("Incoming null")
+        }
+        vertex.itemSize = 3;
+        vertex.numItems = vertexRear;
+
+        //Setting up the normals for the geometry
+        normal = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, normal);
+        gl.bufferData(gl.ARRAY_BUFFER, normalBuff, gl.STATIC_DRAW);
+        normal.itemSize = 3;
+        normal.numItems = normalRear;
+
+        //Setting up the texture coordinates for the geometry
+        texture = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, texture);
+        gl.bufferData(gl.ARRAY_BUFFER, textureBuff, gl.STATIC_DRAW);
+        texture.itemSize = 2;
+        texture.numItems = textureRear;
+
+        //Setting up the vertex indices for this geometry
+        index = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indexBuff, gl.STATIC_DRAW);
+        index.numItems = indexRear;
+
+        return {
+            vertex, normal, texture, index
+        }
+    }
+
+    var run = 0.1;
+    var spin = 90;
+    function addEnemy(){
+        //Draw Elements
+        //Setting up the vertexes for the geometry
+        // let stuff = makeSphere(x,y,z,size);
+        let stuff = makeModel()
+
+        let vertex = stuff.vertex;
+        let normal = stuff.normal;
+        let verTexture = stuff.texture;
+        let index = stuff.index;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertex);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, vertex.itemSize, gl.FLOAT, false, 0, 0);
+
+        // Setup the normal buffer
+        gl.bindBuffer(gl.ARRAY_BUFFER, normal);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, normal.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, verTexture);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, verTexture.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, modelTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+
+        let stack = Stack();
+        stack.push(mvMatrix);
+        var movement = mat4.create();
+        mat4.identity(movement);
+
+        //Adding movement to the enemy
+        run -= 0.01;
+        mat4.translate(movement, [Math.cos(run), 0, 0.8])
+        let trunker = Math.floor(run/(3.14));
+        //console.log(trunker);
+        if(run < trunker*3.14+0.02 && run >  trunker*3.14-0.02) spin += 90;
+        mat4.rotate(movement, degToRad(spin), [0, 1, 0]);
+        //console.log("Spin " +spin)
+        //console.log("Run ", run)
+
+        mat4.multiply(mvMatrix, movement);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+        
+        gl.drawElements(gl.TRIANGLES, index.numItems, gl.UNSIGNED_SHORT, 0);  
+
+        mvMatrix = stack.pop();
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+    }
+
+    function addSky(){
+        //Draw Elements
+        //Setting up the vertexes for the geometry
+        // let stuff = makeSphere(x,y,z,size);
+        let stuff = makeSphere(0,0,0,75)
+
+        vertex = stuff.vertex;
+        normal = stuff.normal;
+        verTexture = stuff.texture;
+        index = stuff.index;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertex);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, vertex.itemSize, gl.FLOAT, false, 0, 0);
+
+        // Setup the normal buffer
+        gl.bindBuffer(gl.ARRAY_BUFFER, normal);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, normal.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, verTexture);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, verTexture.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, skyTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
+
+        gl.drawElements(gl.TRIANGLES, index.numItems, gl.UNSIGNED_SHORT, 0);  
+    }
+
+    function initWall(){
+        wallVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallVertexPositionBuffer);
+        let wallVertices = [
+            0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0,
+            1.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+        ];
+
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(wallVertices), gl.STATIC_DRAW)
+        wallVertexPositionBuffer.itemSize = 3;
+
+        //Wall normals
+        wallNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallNormalBuffer);
+        let wallVertNormals = [
+            0.0, 1.0, 0.0,
+            0.0, 1.0, 0.0,
+            1.0, 1.0, 0.0,
+            1.0, 1.0, 0.0,
+        ];
+        
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(wallVertNormals), gl.STATIC_DRAW);
+        wallNormalBuffer.itemSize = 3;
+
+
+        //Texture coords
+        wallVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallVertexTextureCoordBuffer);
+        let wallTextureCoords = [
+            0.0, 0.0,
+            1.0, 0.0,
+            1.0, 1.0,
+            0.0, 1.0,
+        ];
+        
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(wallTextureCoords), gl.STATIC_DRAW);
+        wallVertexTextureCoordBuffer.itemSize = 2;
+        
+        //Vertex Coords
+        wallVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallVertexIndexBuffer);
+        let wallVertexIndices = [
+            0, 1, 2,
+            0, 2, 3,
+        ];
+        
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(wallVertexIndices), gl.STATIC_DRAW);
+        wallVertexIndexBuffer.numItems = 6;
+    }
+
+    function addWall(x, y, z, rot){
+        //Bind Wall Values
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, wallVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, wallNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, wallVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, wallVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, wallTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, wallVertexIndexBuffer);
+
+        //Set Wall Location
+        let stack = Stack();
+        stack.push(mvMatrix);
+        var displacement = mat4.create();
+        mat4.identity(displacement);
+
+        mat4.translate(displacement, [x, y, z]);
+        mat4.rotate(displacement, degToRad(rot), [0.0, 1.0, 0.0]);
+
+        mat4.multiply(mvMatrix, displacement);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+        
+        //Draw Walls
+        gl.drawElements(gl.TRIANGLES, wallVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);  
+
+        //Reset mvMatrix
+        mvMatrix = stack.pop();
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+    }
+
+    var crossVertexPositionBuffer;
+    var crossVertexIndexBuffer;
+
+    function initCross() {
+        
+        var scaleFactor = 0.5;
+
+        var planeVertices = [
+            -0.1 * scaleFactor, 0.05 * scaleFactor, 0.0,
+            0.1 * scaleFactor, 0.05 * scaleFactor, 0.0,
+            -0.1 * scaleFactor, 0.25 * scaleFactor, 0.0,
+            0.1 * scaleFactor, 0.25 * scaleFactor, 0.0
+        ];
+
+        var planeIndices = [
+            0, 1, 2,
+            1, 3, 2
+        ];
+
+
+
+        // Create buffer for plane vertices
+        crossVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, crossVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(planeVertices), gl.STATIC_DRAW);
+        crossVertexPositionBuffer.itemSize = 3;
+
+        // Create buffer for plane indices
+        crossVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, crossVertexIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(planeIndices), gl.STATIC_DRAW);
+        crossVertexIndexBuffer.numItems = planeIndices.length;
+
+
+        // Texture coordinates for the cross
+        var planeTextureCoords = [
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0
+        ];
+
+
+        // Create buffer for plane texture coordinates
+        crossVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, crossVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(planeTextureCoords), gl.STATIC_DRAW);
+        crossVertexTextureCoordBuffer.itemSize = 2;
+
+    }
+
+    function renderCross() {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+        // Save the current model-view matrix
+        mvPushMatrix();
+
+        // Bind plane texture coordinates
+        gl.bindBuffer(gl.ARRAY_BUFFER, crossVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, crossVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        // Enable blending
+        gl.enable(gl.BLEND);
+
+        // Bind the texture
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, crossTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        // Bind plane vertices
+        gl.bindBuffer(gl.ARRAY_BUFFER, crossVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, crossVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, crossVertexIndexBuffer);
+
+         // Set the rotation for the ammo
+        var crossRotationMatrix = mat4.create();
+        mat4.identity(crossRotationMatrix);
+        mat4.rotate(crossRotationMatrix, degToRad(crossYRot), [0.0, 1.0, 0.0]); // Rotate around the y-axis
+
+        // Multiply the rotation matrix with the model-view matrix
+        mat4.multiply(mvMatrix, crossRotationMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+
+        gl.drawElements(gl.TRIANGLES, crossVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+        // Restore the model-view matrix
+        mvPopMatrix();
+        gl.disable(gl.BLEND);
+    }
+
+    var ammoVertexPositionBuffer;
+    var ammoVertexIndexBuffer;
+
+    function initAmmo() {
+
+        var scaleFactor = 0.5;
+
+        var planeVertices = [
+            -0.1 * scaleFactor, 0.05 * scaleFactor, 0.0,
+            0.1 * scaleFactor, 0.05 * scaleFactor, 0.0,
+            -0.1 * scaleFactor, 0.25 * scaleFactor, 0.0,
+            0.1 * scaleFactor, 0.25 * scaleFactor, 0.0
+        ];
+
+        var planeIndices = [
+            0, 1, 2,
+            1, 3, 2
+        ];
+
+        // Create buffer for plane vertices
+        ammoVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, ammoVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(planeVertices), gl.STATIC_DRAW);
+        ammoVertexPositionBuffer.itemSize = 3;
+
+        // Create buffer for plane indices
+        ammoVertexIndexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ammoVertexIndexBuffer);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(planeIndices), gl.STATIC_DRAW);
+        ammoVertexIndexBuffer.numItems = planeIndices.length;
+
+        // Texture coordinates for the ammo
+        var planeTextureCoords = [
+            0.0, 0.0,
+            1.0, 0.0,
+            0.0, 1.0,
+            1.0, 1.0
+        ];
+
+        // Create buffer for plane texture coordinates
+        ammoVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, ammoVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(planeTextureCoords), gl.STATIC_DRAW);
+        ammoVertexTextureCoordBuffer.itemSize = 2;
+
+    }
+
+    function renderAmmo() {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+    // Save the current model-view matrix
+    mvPushMatrix();
+
+    // Set the rotation for the ammo
+    var ammoRotationMatrix = mat4.create();
+    mat4.identity(ammoRotationMatrix);
+    mat4.rotate(ammoRotationMatrix, degToRad(ammoYRot), [0.0, 1.0, 0.0]); // Rotate around the y-axis
+
+    // Set the translation for the ammo
+    var ammoTranslationMatrix = mat4.create();
+    mat4.identity(ammoTranslationMatrix);
+    mat4.translate(ammoTranslationMatrix, [0.0, 0.0, 0.3]); 
+
+    // Multiply the rotation and translation matrices with the model-view matrix
+    mat4.multiply(mvMatrix, ammoTranslationMatrix);
+    mat4.multiply(mvMatrix, ammoRotationMatrix);
+
+    // Bind plane texture coordinates
+    gl.bindBuffer(gl.ARRAY_BUFFER, ammoVertexTextureCoordBuffer);
+    gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, ammoVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+    // Enable blending
+    gl.enable(gl.BLEND);
+
+    // Bind the texture
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, ammoTexture);
+    gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+    // Bind plane vertices
+    gl.bindBuffer(gl.ARRAY_BUFFER, ammoVertexPositionBuffer);
+    gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, ammoVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ammoVertexIndexBuffer);
+
+    gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+
+    gl.drawElements(gl.TRIANGLES, ammoVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+    // Restore the model-view matrix
+    mvPopMatrix();
+    gl.disable(gl.BLEND);
+}
+
+    var crossYRot = 0;
+    var ammoYRot = 0;
+    var lastTime = 0;
+
+    function animate() {
+        var timeNow = new Date().getTime();
+        if (lastTime !== 0) {
+            var elapsed = timeNow - lastTime;
+            crossYRot += (45 * elapsed) / 1000.0; 
+            ammoYRot += (20 * elapsed) / 1000.0; 
+
+        }
+        lastTime = timeNow;
+    }
+
+
+    //draws the scene
+    function drawScene() 
+    {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+        mat4.identity(mvMatrix);
+
+        // call a function to generate the view matrix for the DOOM Camera
+        aviewmatrix = genViewMatrix(); 
+        mat4.multiply(mvMatrix, aviewmatrix);
+
+        //  draw terrain
+        gl.bindBuffer(gl.ARRAY_BUFFER, terVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, terVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, terNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, terNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, terVertexTextureCoordBuffer);
+        gl.vertexAttribPointer(shaderProgram.textureCoordAttribute, terVertexTextureCoordBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, exTexture);
+        gl.uniform1i(shaderProgram.samplerUniform, 0);
+
+        //lighting-values are set here
+        var ambLight = [0.5, 0.5, 0.5];
+        var dirLight = [0.8, 0.8, 0.8];
+        var dirAngle = [0.0, -1.0, -1.0];
+        gl.uniform3fv(shaderProgram.ambLightUniform, ambLight);
+        gl.uniform3fv(shaderProgram.dirLightUniform, dirLight);
+        gl.uniform3fv(shaderProgram.dirAngleUniform, vec3.scale(dirAngle, -1));
+        
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, terVertexIndexBuffer);
+        
+        setMatrixUniforms();
+        gl.drawElements(gl.TRIANGLES, terVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+
+        //Note that the init function for the geometry is called for every draw
+        // call. This is suboptimal and should be fixed
+        addEnemy();
+        addSky();
+        for(var x = 0; x < wallsArray.length; x++) {
+            addWall(wallsArray[x][0], wallsArray[x][1], wallsArray[x][2], wallsArray[x][3]);
+        }
+        animate();
+        renderCross();
+        renderAmmo();
+        
+    }
+
+    function Frames() 
+    {
+        requestAnimFrame(Frames);
+        drawScene();
+    }
+
+    
+</script>
+
+</head>
+
+<!-- declare the "body" of the HTML document-->
+<!-- the onload attribute specifies a javascript function to execute when the body tag is loaded into the browser -->
+
+<body onload="startHelloWebGL()">
+<h1>Final Project: DOOM </h1>
+
+<!-- embed the HTML5 Canvas Drawing object on the page.-->
+<!-- Name the canvas 'hellowebgl' for the javascript code. -->
+<canvas id="hellowebgl" width=1280 height=720 oncontextmenu="return false;">
+If you're seeing this your web browser doesn't support the &lt;canvas>&gt; element. Ouch!
+</canvas>
+
+<img id="overlay" src="textures/DOOMOverlay.png" alt="Overlay Image" style="position: absolute; top: 100px; left: 9px; width: 1280px; height: 720px; pointer-events: none;">
+
+</body>
+</html>
